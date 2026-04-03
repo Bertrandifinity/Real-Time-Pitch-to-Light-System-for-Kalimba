@@ -1,148 +1,173 @@
-#define _USE_MATH_DEFINES
-#include <Windows.h>
-#include <cmath>
 #include <iostream>
 #include <vector>
-#include <cstdint>
+#include <cmath>
+#include <alsa/asoundlib.h>
+#include <string>
+#include <cstdio>
 
 using namespace std;
 
-typedef struct {
-    double re;
-    double im;
-} Complex;
+struct Note {
+    string name;
+    double freq;
+};
+
+const vector<Note> NOTE_TABLE = {
+    {"C4", 258.398},
+    {"D4", 301.465},
+    {"E4", 322.998},
+    {"F4", 344.531},
+    {"G4", 387.598},
+    {"A4", 430.664},
+    {"B4", 495.264},
+    {"C5", 516.797},
+    {"D5", 581.396},
+    {"E5", 667.529},
+    {"F5", 710.596},
+    {"G5", 796.729},
+    {"A5", 882.861},
+    {"B5", 990.527},
+    {"C6", 1055.127},
+    {"D6", 1184.326},
+    {"E6", 1313.525}
+};
+
+const double TOLERANCE = 10.0;
+
+struct Complex { double re = 0, im = 0; };
 
 void fft(vector<Complex>& x, bool invert) {
-    int n = (int)x.size();
-
+    int n = x.size();
     for (int i = 1, j = 0; i < n; i++) {
         int bit = n >> 1;
-        for (; j & bit; bit >>= 1)
-            j ^= bit;
+        for (; j & bit; bit >>= 1) j ^= bit;
         j ^= bit;
-
-        if (i < j)
-            swap(x[i], x[j]);
+        if (i < j) swap(x[i], x[j]);
     }
-
     for (int len = 2; len <= n; len <<= 1) {
         double ang = 2 * M_PI / len * (invert ? -1 : 1);
-        Complex wlen = { cos(ang), sin(ang) };
+        Complex wlen = {cos(ang), sin(ang)};
         for (int i = 0; i < n; i += len) {
-            Complex w = { 1, 0 };
-            for (int j = 0; j < len / 2; j++) {
-                Complex u = x[i + j];
+            Complex w = {1, 0};
+            for (int j = 0; j < len/2; j++) {
+                Complex u = x[i+j];
                 Complex v = {
-                    x[i + j + len/2].re * w.re - x[i + j + len/2].im * w.im,
-                    x[i + j + len/2].re * w.im + x[i + j + len/2].im * w.re
+                    x[i+j+len/2].re * w.re - x[i+j+len/2].im * w.im,
+                    x[i+j+len/2].re * w.im + x[i+j+len/2].im * w.re
                 };
-                x[i + j].re = u.re + v.re;
-                x[i + j].im = u.im + v.im;
-                x[i + j + len/2].re = u.re - v.re;
-                x[i + j + len/2].im = u.im - v.im;
-
-                Complex nw = {
-                    w.re * wlen.re - w.im * wlen.im,
-                    w.re * wlen.im + w.im * wlen.re
-                };
-                w = nw;
+                x[i+j].re = u.re + v.re;
+                x[i+j].im = u.im + v.im;
+                x[i+j+len/2].re = u.re - v.re;
+                x[i+j+len/2].im = u.im - v.im;
+                w = {w.re*wlen.re - w.im*wlen.im, w.re*wlen.im + w.im*wlen.re};
             }
         }
     }
-
-    if (invert) {
-        for (int i = 0; i < n; i++) {
-            x[i].re /= n;
-            x[i].im /= n;
-        }
-    }
+    if (invert)
+        for (auto& c : x) { c.re /= n; c.im /= n; }
 }
 
-double find_freq(const vector<int16_t>& buf, int sample_rate, int fft_size) {
-    vector<Complex> x(fft_size, {0, 0});
-    int n = min((int)buf.size(), fft_size);
-    for (int i = 0; i < n; i++) {
+double get_freq(const int16_t* buf, int samples, int sample_rate) {
+    const int fft_size = 1024;
+    vector<Complex> x(fft_size);
+    int n = min(samples, fft_size);
+    for (int i = 0; i < n; i++)
         x[i].re = buf[i];
-    }
 
     fft(x, false);
 
-    vector<double> mag(fft_size / 2);
-    for (int i = 0; i < fft_size / 2; i++) {
-        mag[i] = x[i].re * x[i].re + x[i].im * x[i].im;
-    }
-
+    double max_mag = 0;
     int peak = 1;
-    for (int i = 2; i < fft_size / 2; i++) {
-        if (mag[i] > mag[peak]) peak = i;
+    for (int i = 1; i < fft_size/2; i++) {
+        double mag = x[i].re*x[i].re + x[i].im*x[i].im;
+        if (mag > max_mag) {
+            max_mag = mag;
+            peak = i;
+        }
     }
-
     return (double)peak * sample_rate / fft_size;
 }
 
-const int SAMPLE_RATE = 44100;
-const int FFT_SIZE = 4096;
-vector<int16_t> g_buffer;
+string match_closest_note(double freq, double &standard_freq) {
+    double min_diff = 1e9;
+    string best_name = "";
+    standard_freq = 0;
 
-void CALLBACK waveInProc(
-    HWAVEIN hwi,
-    UINT uMsg,
-    DWORD_PTR dwInstance,
-    DWORD_PTR dwParam1,
-    DWORD_PTR dwParam2
-) {
-    if (uMsg == WIM_DATA) {
-        WAVEHDR* wh = (WAVEHDR*)dwParam1;
-        int16_t* data = (int16_t*)wh->lpData;
-        int samples = wh->dwBytesRecorded / 2;
-
-        g_buffer.assign(data, data + samples);
-        waveInAddBuffer(hwi, wh, sizeof(WAVEHDR));
+    for (const auto& note : NOTE_TABLE) {
+        double diff = fabs(freq - note.freq);
+        if (diff < min_diff) {
+            min_diff = diff;
+            best_name = note.name;
+            standard_freq = note.freq;
+        }
     }
+    return best_name;
 }
 
+double get_rms(const int16_t* buf, int len) {
+    double sum = 0;
+    for (int i = 0; i < len; i++)
+        sum += buf[i] * buf[i];
+    return sqrt(sum / len);
+}
+
+const int SAMPLE_RATE = 44100;
+const int BUF_SIZE = 1024;
+const double NOISE_THRESH = 80.0;
+
 int main() {
-    cout << "=== 实时声音频率检测 ===" << endl;
-    cout << "按回车退出" << endl << endl;
+    cout << "=== Note Lock · Accurate Frequency Match ===" << endl;
+    cout << "Press Ctrl+C to exit" << endl << endl;
 
-    HWAVEIN hwi;
-    WAVEFORMATEX fmt{};
-    fmt.wFormatTag = WAVE_FORMAT_PCM;
-    fmt.nChannels = 1;
-    fmt.nSamplesPerSec = SAMPLE_RATE;
-    fmt.wBitsPerSample = 16;
-    fmt.nBlockAlign = fmt.nChannels * fmt.wBitsPerSample / 8;
-    fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
+    snd_pcm_t* pcm;
+    int err = snd_pcm_open(&pcm, "plughw:2,0", SND_PCM_STREAM_CAPTURE, 0);
+    if (err < 0) { cerr << "Failed to open microphone" << endl; return 1; }
 
-    MMRESULT res = waveInOpen(&hwi, WAVE_MAPPER, &fmt, (DWORD_PTR)waveInProc, 0, CALLBACK_FUNCTION);
-    if (res != MMSYSERR_NOERROR) {
-        cout << "麦克风打开失败" << endl;
-        return 1;
-    }
+    snd_pcm_hw_params_t* params;
+    snd_pcm_hw_params_malloc(&params);
+    snd_pcm_hw_params_any(pcm, params);
+    snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(pcm, params, SND_PCM_FORMAT_S16_LE);
+    snd_pcm_hw_params_set_channels(pcm, params, 1);
 
-    const int BUF_SAMPLES = 4096;
-    vector<int16_t> wave_buf(BUF_SAMPLES);
-    WAVEHDR wh{};
-    wh.lpData = (LPSTR)wave_buf.data();
-    wh.dwBufferLength = BUF_SAMPLES * 2;
-    waveInPrepareHeader(hwi, &wh, sizeof(WAVEHDR));
-    waveInAddBuffer(hwi, &wh, sizeof(WAVEHDR));
-    waveInStart(hwi);
+    unsigned int rate = SAMPLE_RATE;
+    snd_pcm_hw_params_set_rate_near(pcm, params, &rate, nullptr);
 
-    while (!GetAsyncKeyState(VK_RETURN)) {
-        if (!g_buffer.empty()) {
-            double freq = find_freq(g_buffer, SAMPLE_RATE, FFT_SIZE);
-            if (freq > 60 && freq < 3000) {
-                cout << "当前频率: " << freq << " Hz   \r";
-            }
+    snd_pcm_uframes_t period = BUF_SIZE;
+    snd_pcm_hw_params_set_period_size_near(pcm, params, &period, nullptr);
+
+    snd_pcm_hw_params(pcm, params);
+    snd_pcm_hw_params_free(params);
+
+    vector<int16_t> buf(BUF_SIZE);
+    snd_pcm_prepare(pcm);
+
+    string current_note;
+    double display_freq = 0;
+
+    while (true) {
+        err = snd_pcm_readi(pcm, buf.data(), BUF_SIZE);
+        if (err == -EPIPE) { snd_pcm_prepare(pcm); continue; }
+        if (err < 0) break;
+
+        double rms = get_rms(buf.data(), BUF_SIZE);
+        if (rms < NOISE_THRESH)
+            continue;
+
+        double real_freq = get_freq(buf.data(), BUF_SIZE, SAMPLE_RATE);
+        string new_note = match_closest_note(real_freq, display_freq);
+
+        if (!new_note.empty() && new_note != current_note) {
+            current_note = new_note;
         }
-        Sleep(50);
+
+        if (!current_note.empty()) {
+            printf("\rCurrent Note: %-6s  Standard Freq: %.3f Hz", current_note.c_str(), display_freq);
+            fflush(stdout);
+        }
     }
 
-    waveInStop(hwi);
-    waveInUnprepareHeader(hwi, &wh, sizeof(WAVEHDR));
-    waveInClose(hwi);
-
-    cout << endl << "已退出" << endl;
+    snd_pcm_close(pcm);
+    cout << endl;
     return 0;
 }
