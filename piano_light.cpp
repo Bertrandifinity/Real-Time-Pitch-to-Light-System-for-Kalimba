@@ -10,219 +10,223 @@
 #include <alsa/asoundlib.h>
 #include <fftw3.h>
 
+
 #define DEVICE_NAME "plughw:2,0"
 #define SAMPLE_RATE 48000
 #define CHUNK_SIZE 4096
-#define CHANNELS 2
+#define CHANNELS 1
 #define VOL_THRESHOLD 0.0012
 
-std::atomic<bool> running(true);
 
-std::atomic<int> anim_mode(0);
-std::atomic<int> anim_speed(100);
+using namespace std;
+atomic<bool> running(true);
+atomic<int>  cmd_mode(0);
+atomic<int>  cmd_speed(60);
+atomic<bool> cmd_run(false);
+atomic<bool> stop_led(false);  // 强制停灯标志
 
-void signal_handler(int signum) { running = false; }
 
-void led_animation_thread() {
-    int leds[5] = {17, 27, 22, 23, 24};
-    int step = 0;
+const int LED_TIMEOUT_MS = 200;  // 🔥 亮灯最多跑200ms，强制切断
+void signal_handler(int) {
+    running = false;
+}
 
-    system("pinctrl set 17,27,22,23,24 dl > /dev/null 2>&1");
+// 超时监控线程：200ms到强制停灯
+void timeout_watcher() {
+    while (running) {
+        this_thread::sleep_for(chrono::milliseconds(5));
+
+        if (cmd_run) {
+            this_thread::sleep_for(chrono::milliseconds(LED_TIMEOUT_MS));
+            stop_led = true;  // 到时间强制停
+        }
+    }
+}
+
+
+void led_thread() {
+    const int leds[] = {17, 27, 22, 23, 24};
+    const int n = sizeof(leds)/sizeof(int);
+    thread watcher(timeout_watcher);
 
     while (running) {
-        int mode = anim_mode.load();
-        int speed = anim_speed.load();
-
-        if (mode == 0) {
-            system("pinctrl set 17,27,22,23,24 dl > /dev/null 2>&1");
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            step = 0;
+        if (!cmd_run) {
+            for (int p : leds)
+                system(("pinctrl set " + to_string(p) + " dl >/dev/null 2>&1").c_str());
+            this_thread::sleep_for(chrono::milliseconds(10));
             continue;
         }
+        // 开始执行
+        int mode = cmd_mode;
+        int spd = cmd_speed;
 
-        std::string dh_pins = "";
-        std::string dl_pins = "";
+        stop_led = false;
 
+        // 低音：左→右
         if (mode == 1) {
-            // 左 → 右跑马
-            for(int i = 0; i < 5; i++) {
-                if (i == step) dh_pins += std::to_string(leds[i]) + ",";
-                else dl_pins += std::to_string(leds[i]) + ",";
+            for (int i = 0; i < n && !stop_led; ++i) {
+                for (int j = 0; j < n; ++j)
+                    system(("pinctrl set " + to_string(leds[j]) + (j==i ? " dh":"dl") + " >/dev/null 2>&1").c_str());
+                this_thread::sleep_for(chrono::milliseconds(spd));
             }
-            step = (step + 1) % 5;
+        }
 
-        } else if (mode == 2) {
-            // 右 → 左跑马
-            for(int i = 0; i < 5; i++) {
-                if (4 - i == step) dh_pins += std::to_string(leds[i]) + ",";
-                else dl_pins += std::to_string(leds[i]) + ",";
+        // 中音：右→左
+        else if (mode == 2) {
+            for (int i = 0; i < n && !stop_led; ++i) {
+                int pos = n-1 - i;
+                for (int j = 0; j < n; ++j)
+                    system(("pinctrl set " + to_string(leds[j]) + (j==pos ? " dh":"dl") + " >/dev/null 2>&1").c_str());
+                this_thread::sleep_for(chrono::milliseconds(spd));
             }
-            step = (step + 1) % 5;
-
-        } else if (mode == 3) {
-            // 全体闪烁
-            if (step % 2 == 0) dh_pins = "17,27,22,23,24,";
-            else dl_pins = "17,27,22,23,24,";
-            step = (step + 1) % 2;
         }
 
-        if (!dh_pins.empty()) dh_pins.pop_back();
-        if (!dl_pins.empty()) dl_pins.pop_back();
-
-        std::string cmd = "";
-        if (!dh_pins.empty()) {
-            cmd += "pinctrl set " + dh_pins + " dh > /dev/null 2>&1 ; ";
+        // 高音闪烁
+        else if (mode == 3) {
+            for (int i = 0; i < 3 && !stop_led; ++i) {
+                for (int p : leds) system(("pinctrl set " + to_string(p) + " dh >/dev/null 2>&1").c_str());
+                this_thread::sleep_for(chrono::milliseconds(spd));
+                if (stop_led) break;
+                for (int p : leds) system(("pinctrl set " + to_string(p) + " dl >/dev/null 2>&1").c_str());
+                if (stop_led) break;
+                this_thread::sleep_for(chrono::milliseconds(spd));
+            }
         }
-        if (!dl_pins.empty()) {
-            cmd += "pinctrl set " + dl_pins + " dl > /dev/null 2>&1";
-        }
 
-        system(cmd.c_str());
-        std::this_thread::sleep_for(std::chrono::milliseconds(speed));
+        // 全部复位
+        cmd_run = false;
+        stop_led = false;
+        for (int p : leds)
+            system(("pinctrl set " + to_string(p) + " dl >/dev/null 2>&1").c_str());
     }
 
-    system("pinctrl set 17,27,22,23,24 dl > /dev/null 2>&1");
+    watcher.join();
 }
+
 
 struct NoteDef {
-    std::string name;
+    string name;
     double freq;
     int mode;
-    int speed_ms;
+    int speed;
 };
 
-// ====================== 模式彻底修正版 ======================
-const std::vector<NoteDef> NOTE_DICT = {
-    // 低音区：模式 1 → 左 → 右
-    {"C4", 261.63, 1, 140},
-    {"D4", 293.66, 1, 130},
-    {"E4", 329.63, 1, 120},
-    {"F4", 349.23, 1, 110},
-    {"G4", 392.00, 1, 100},
-    {"A4", 440.00, 1,  90},
-    {"B4", 493.88, 1,  80},
 
-    // 中音区：模式 2 → 右 → 左
-    {"C5", 523.25, 2, 140},
-    {"D5", 587.33, 2, 130},
-    {"E5", 659.25, 2, 120},
-    {"F5", 698.46, 2, 110},
-    {"G5", 783.99, 2, 100},
-    {"A5", 880.00, 2,  90},
-    {"B5", 987.77, 2,  80},
 
-    // 高音区：模式 3 → 全体闪烁
-    {"C6", 1046.50, 3, 140},
-    {"D6", 1174.66, 3, 120},
-    {"E6", 1318.51, 3, 100}
+const vector<NoteDef> NOTE_DICT = {
+    {"C4", 261.63, 1, 100}, {"D4", 293.66, 1, 85}, {"E4", 329.63, 1, 70},
+    {"F4", 349.23, 1, 55}, {"G4", 392.00, 1, 45}, {"A4", 440.00, 1, 35}, {"B4", 493.88, 1, 25},
+
+    {"C5", 523.25, 2, 100}, {"D5", 587.33, 2, 85}, {"E5", 659.25, 2, 70},
+    {"F5", 698.46, 2, 55}, {"G5", 783.99, 2, 45}, {"A5", 880.00, 2, 35}, {"B5", 987.77, 2, 25},
+
+    {"C6",1046.50, 3, 80}, {"D6",1174.66, 3, 60}, {"E6",1318.51, 3, 40}
 };
-// ===========================================================
 
-NoteDef identify_note(double freq) {
-    for (const auto& note : NOTE_DICT) {
-        if (std::abs(freq - note.freq) < note.freq * 0.10) {
-            return note;
+
+NoteDef identify(double freq) {
+    double best = 1e9;
+    NoteDef res{"",0,0,0};
+    for (auto& x : NOTE_DICT) {
+        double d = fabs(freq - x.freq);
+        if (d < best) {
+            best = d;
+            res = x;
         }
     }
-    return {"Unknown", 0.0, 0, 100};
+    return best < 12.0 ? res : NoteDef{"",0,0,0};
 }
 
-int main() {
-    system("pinctrl set 17,27,22,23,24,26 op");
-    system("pinctrl set 26 dl");
+bool open_audio(snd_pcm_t*& h) {
+    int err = snd_pcm_open(&h, DEVICE_NAME, SND_PCM_STREAM_CAPTURE, 0);
+    if (err < 0) return false;
 
-    std::cout << "🌟 17键拇指琴灯光程序已启动\n" << std::endl;
+    snd_pcm_hw_params_t *params;
+    snd_pcm_hw_params_alloca(&params);
+    snd_pcm_hw_params_any(h, params);
+    snd_pcm_hw_params_set_access(h, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(h, params, SND_PCM_FORMAT_S32_LE);
+    snd_pcm_hw_params_set_channels(h, params, CHANNELS);
+
+    unsigned int rate = SAMPLE_RATE;
+    snd_pcm_hw_params_set_rate_near(h, params, &rate, 0);
+    snd_pcm_hw_params(h, params);
+    
+    return snd_pcm_prepare(h) >= 0;
+}
+
+
+int main() {
+    system("pinctrl set 17,27,22,23,24,26 op >/dev/null 2>&1");
+    system("pinctrl set 26 dl >/dev/null 2>&1");
     signal(SIGINT, signal_handler);
 
-    std::thread anim_thread(led_animation_thread);
+    thread t(led_thread);
 
-    snd_pcm_t *pcm_handle = nullptr;
-    auto open_audio = [&]() {
-        if (snd_pcm_open(&pcm_handle, DEVICE_NAME, SND_PCM_STREAM_CAPTURE, 0) < 0) return false;
-        snd_pcm_hw_params_t *params;
-        snd_pcm_hw_params_alloca(&params);
-        snd_pcm_hw_params_any(pcm_handle, params);
-        snd_pcm_hw_params_set_access(pcm_handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
-        snd_pcm_hw_params_set_format(pcm_handle, params, SND_PCM_FORMAT_S32_LE);
-        snd_pcm_hw_params_set_channels(pcm_handle, params, CHANNELS);
-        unsigned int rate = SAMPLE_RATE;
-        snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rate, 0);
-        snd_pcm_hw_params(pcm_handle, params);
-        return true;
-    };
+    snd_pcm_t *pcm = nullptr;
 
-    if (!open_audio()) {
-        std::cerr << "❌ 无法打开麦克风！" << std::endl;
+    if (!open_audio(pcm)) {
+        cerr << "mic error\n";
         running = false;
-        anim_thread.join();
+        t.join();
         return 1;
     }
 
-    double *in = (double*)fftw_malloc(sizeof(double) * CHUNK_SIZE);
-    fftw_complex *out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * (CHUNK_SIZE / 2 + 1));
+    double *in = fftw_alloc_real(CHUNK_SIZE);
+    fftw_complex *out = fftw_alloc_complex(CHUNK_SIZE/2+1);
     fftw_plan plan = fftw_plan_dft_r2c_1d(CHUNK_SIZE, in, out, FFTW_MEASURE);
-    std::vector<int32_t> buffer(CHUNK_SIZE * CHANNELS);
-
-    int silence_counter = 0;
+    vector<int32_t> buf(CHUNK_SIZE*CHANNELS);
 
     while (running) {
-        int err = snd_pcm_readi(pcm_handle, buffer.data(), CHUNK_SIZE);
+        int err = snd_pcm_readi(pcm, buf.data(), CHUNK_SIZE);
+        if (err == -EPIPE) { snd_pcm_prepare(pcm); continue; }
         if (err < 0) {
-            if (err == -EPIPE) snd_pcm_prepare(pcm_handle);
-            else { snd_pcm_close(pcm_handle); std::this_thread::sleep_for(std::chrono::milliseconds(20)); open_audio(); }
+            snd_pcm_close(pcm);
+            this_thread::sleep_for(chrono::milliseconds(20));
+            open_audio(pcm);
             continue;
         }
 
-        double sum_sq = 0;
-        for (int i = 0; i < CHUNK_SIZE; i++) {
-            double val = (double)buffer[i * CHANNELS] / 2147483648.0;
-            sum_sq += val * val;
-            in[i] = val;
+        double sum = 0;
+        for (int i = 0; i < CHUNK_SIZE; ++i) {
+            double v = buf[i] / 2147483648.0;
+            sum += v*v;
+            in[i] = v;
         }
-        double volume = std::sqrt(sum_sq / CHUNK_SIZE);
 
-        if (volume > VOL_THRESHOLD) {
-            silence_counter = 0;
+        double vol = sqrt(sum / CHUNK_SIZE);
+        if (vol > VOL_THRESHOLD && !cmd_run) {
             fftw_execute(plan);
+            double max_m = 0;
+            int peak = 0;
+            for (int i = 0; i <= CHUNK_SIZE/2; ++i) {
+                double f = (double)i * SAMPLE_RATE / CHUNK_SIZE;
+                if (f < 180) continue;
+                double m = out[i][0]*out[i][0] + out[i][1]*out[i][1];
+                if (m > max_m) { max_m = m; peak = i; }
+            }
+            double freq = (double)peak * SAMPLE_RATE / CHUNK_SIZE;
+            auto note = identify(freq);
 
-            double max_mag = 0;
-            int peak_idx = 0;
-            for (int i = 0; i <= CHUNK_SIZE / 2; i++) {
-                double freq = (double)i * SAMPLE_RATE / CHUNK_SIZE;
-                if (freq < 200) continue;
-                double mag = out[i][0]*out[i][0] + out[i][1]*out[i][1];
-                if (mag > max_mag) { max_mag = mag; peak_idx = i; }
+            if (!note.name.empty()) {
+                cmd_mode = note.mode;
+                cmd_speed = note.speed;
+                cmd_run = true;
+                printf("\rNote: %-3s %.1f Hz   ", note.name.c_str(), freq);
             }
 
-            double peak_freq = (double)peak_idx * SAMPLE_RATE / CHUNK_SIZE;
-            NoteDef detected = identify_note(peak_freq);
-
-            if (detected.name != "Unknown") {
-                anim_mode = detected.mode;
-                anim_speed = detected.speed_ms;
-
-                printf("\r🎹 %-3s %.1f Hz 模式:%d ", detected.name.c_str(), peak_freq, detected.mode);
-                std::fflush(stdout);
-            } else {
-                printf("\r〰️ 未知音: %.1f Hz          ", peak_freq);
-                std::fflush(stdout);
-            }
         } else {
-            silence_counter++;
-            if (silence_counter > 6) {
-                anim_mode = 0;
-                printf("\r💤 安静，灯光已关闭          ");
-                std::fflush(stdout);
-                silence_counter = 6;
-            }
+            printf("\rSilent               ");
         }
+        fflush(stdout);
     }
 
-    std::cout << "\n\n🛑 程序退出" << std::endl;
-    anim_thread.join();
-    if (pcm_handle) snd_pcm_close(pcm_handle);
+    running = false;
+    t.join();
+    snd_pcm_close(pcm);
     fftw_destroy_plan(plan);
     fftw_free(in);
     fftw_free(out);
     return 0;
 }
+
