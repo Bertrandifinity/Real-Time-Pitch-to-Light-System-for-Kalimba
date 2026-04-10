@@ -26,12 +26,12 @@ atomic<bool> cmd_run(false);
 atomic<bool> stop_led(false);  // 强制停灯标志
 
 
-const int LED_TIMEOUT_MS = 200;  // 🔥 亮灯最多跑200ms，强制切断
+const int LED_TIMEOUT_MS = 300;  // 🔥 亮灯最多跑300ms，强制切断
 void signal_handler(int) {
     running = false;
 }
 
-// 超时监控线程：200ms到强制停灯
+// 超时监控线程：300ms到强制停灯
 void timeout_watcher() {
     while (running) {
         this_thread::sleep_for(chrono::milliseconds(5));
