@@ -6,10 +6,11 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <alsa/asoundlib.h>
 #include <fftw3.h>
-
+#include <unistd.h>
 
 #define DEVICE_NAME "plughw:2,0"
 #define SAMPLE_RATE 48000
@@ -17,32 +18,61 @@
 #define CHANNELS 1
 #define VOL_THRESHOLD 0.0012
 
-
 using namespace std;
+
 atomic<bool> running(true);
 atomic<int>  cmd_mode(0);
 atomic<int>  cmd_speed(60);
 atomic<bool> cmd_run(false);
-atomic<bool> stop_led(false);  // 强制停灯标志
+atomic<bool> stop_led(false);
 
+char current_note[4] = "--";
+uint64_t last_note_time = 0;
+const uint64_t NOTE_TIMEOUT_MS = 2000; // 2秒无声音变Silent
 
-const int LED_TIMEOUT_MS = 300;  // 🔥 亮灯最多跑300ms，强制切断
-void signal_handler(int) {
-    running = false;
+const int LED_TIMEOUT_MS = 300;
+
+uint64_t millis() {
+    using namespace chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-// 超时监控线程：300ms到强制停灯
 void timeout_watcher() {
     while (running) {
         this_thread::sleep_for(chrono::milliseconds(5));
-
         if (cmd_run) {
             this_thread::sleep_for(chrono::milliseconds(LED_TIMEOUT_MS));
-            stop_led = true;  // 到时间强制停
+            stop_led = true;
         }
     }
 }
 
+void signal_handler(int) {
+    running = false;
+}
+
+void ble_thread() {
+    system("hciconfig hci0 up >/dev/null 2>&1");
+    system("hciconfig hci0 leadv 0 >/dev/null 2>&1");
+
+    string last;
+    while (running) {
+        string note = current_note;
+        if (note == last) {
+            this_thread::sleep_for(chrono::milliseconds(200));
+            continue;
+        }
+        last = note;
+
+        char cmd[128];
+        snprintf(cmd, sizeof cmd,
+            "hcitool -i hci0 cmd 0x08 0x0008 07 02 01 06 03 FF 11 22 %02X %02X >/dev/null 2>&1",
+            note[0], note[1]);
+        system(cmd);
+
+        this_thread::sleep_for(chrono::milliseconds(200));
+    }
+}
 
 void led_thread() {
     const int leds[] = {17, 27, 22, 23, 24};
@@ -56,13 +86,11 @@ void led_thread() {
             this_thread::sleep_for(chrono::milliseconds(10));
             continue;
         }
-        // 开始执行
+
         int mode = cmd_mode;
         int spd = cmd_speed;
-
         stop_led = false;
 
-        // 低音：左→右
         if (mode == 1) {
             for (int i = 0; i < n && !stop_led; ++i) {
                 for (int j = 0; j < n; ++j)
@@ -70,8 +98,6 @@ void led_thread() {
                 this_thread::sleep_for(chrono::milliseconds(spd));
             }
         }
-
-        // 中音：右→左
         else if (mode == 2) {
             for (int i = 0; i < n && !stop_led; ++i) {
                 int pos = n-1 - i;
@@ -80,8 +106,6 @@ void led_thread() {
                 this_thread::sleep_for(chrono::milliseconds(spd));
             }
         }
-
-        // 高音闪烁
         else if (mode == 3) {
             for (int i = 0; i < 3 && !stop_led; ++i) {
                 for (int p : leds) system(("pinctrl set " + to_string(p) + " dh >/dev/null 2>&1").c_str());
@@ -93,7 +117,6 @@ void led_thread() {
             }
         }
 
-        // 全部复位
         cmd_run = false;
         stop_led = false;
         for (int p : leds)
@@ -103,15 +126,12 @@ void led_thread() {
     watcher.join();
 }
 
-
 struct NoteDef {
     string name;
     double freq;
     int mode;
     int speed;
 };
-
-
 
 const vector<NoteDef> NOTE_DICT = {
     {"C4", 261.63, 1, 100}, {"D4", 293.66, 1, 85}, {"E4", 329.63, 1, 70},
@@ -123,10 +143,9 @@ const vector<NoteDef> NOTE_DICT = {
     {"C6",1046.50, 3, 80}, {"D6",1174.66, 3, 60}, {"E6",1318.51, 3, 40}
 };
 
-
 NoteDef identify(double freq) {
     double best = 1e9;
-    NoteDef res{"",0,0,0};
+    NoteDef res{"", 0, 0, 0};
     for (auto& x : NOTE_DICT) {
         double d = fabs(freq - x.freq);
         if (d < best) {
@@ -134,7 +153,7 @@ NoteDef identify(double freq) {
             res = x;
         }
     }
-    return best < 12.0 ? res : NoteDef{"",0,0,0};
+    return best < 12.0 ? res : NoteDef{"", 0, 0, 0};
 }
 
 bool open_audio(snd_pcm_t*& h) {
@@ -151,24 +170,23 @@ bool open_audio(snd_pcm_t*& h) {
     unsigned int rate = SAMPLE_RATE;
     snd_pcm_hw_params_set_rate_near(h, params, &rate, 0);
     snd_pcm_hw_params(h, params);
-    
     return snd_pcm_prepare(h) >= 0;
 }
-
 
 int main() {
     system("pinctrl set 17,27,22,23,24,26 op >/dev/null 2>&1");
     system("pinctrl set 26 dl >/dev/null 2>&1");
     signal(SIGINT, signal_handler);
 
-    thread t(led_thread);
+    thread t_led(led_thread);
+    thread t_ble(ble_thread);
 
     snd_pcm_t *pcm = nullptr;
-
     if (!open_audio(pcm)) {
-        cerr << "mic error\n";
+        cerr << "mic error" << endl;
         running = false;
-        t.join();
+        t_led.join();
+        t_ble.join();
         return 1;
     }
 
@@ -177,9 +195,14 @@ int main() {
     fftw_plan plan = fftw_plan_dft_r2c_1d(CHUNK_SIZE, in, out, FFTW_MEASURE);
     vector<int32_t> buf(CHUNK_SIZE*CHANNELS);
 
+    last_note_time = millis();
+
     while (running) {
         int err = snd_pcm_readi(pcm, buf.data(), CHUNK_SIZE);
-        if (err == -EPIPE) { snd_pcm_prepare(pcm); continue; }
+        if (err == -EPIPE) {
+            snd_pcm_prepare(pcm);
+            continue;
+        }
         if (err < 0) {
             snd_pcm_close(pcm);
             this_thread::sleep_for(chrono::milliseconds(20));
@@ -195,6 +218,8 @@ int main() {
         }
 
         double vol = sqrt(sum / CHUNK_SIZE);
+        bool detected = false;
+
         if (vol > VOL_THRESHOLD && !cmd_run) {
             fftw_execute(plan);
             double max_m = 0;
@@ -203,7 +228,10 @@ int main() {
                 double f = (double)i * SAMPLE_RATE / CHUNK_SIZE;
                 if (f < 180) continue;
                 double m = out[i][0]*out[i][0] + out[i][1]*out[i][1];
-                if (m > max_m) { max_m = m; peak = i; }
+                if (m > max_m) {
+                    max_m = m;
+                    peak = i;
+                }
             }
             double freq = (double)peak * SAMPLE_RATE / CHUNK_SIZE;
             auto note = identify(freq);
@@ -212,21 +240,34 @@ int main() {
                 cmd_mode = note.mode;
                 cmd_speed = note.speed;
                 cmd_run = true;
-                printf("\rNote: %-3s %.1f Hz   ", note.name.c_str(), freq);
-            }
 
-        } else {
-            printf("\rSilent               ");
+                current_note[0] = note.name[0];
+                current_note[1] = note.name[1];
+                current_note[2] = 0;
+                last_note_time = millis();
+                detected = true;
+
+                printf("\rNote: %-3s    ", note.name.c_str());
+            }
         }
+
+        if (!detected) {
+            if (millis() - last_note_time > NOTE_TIMEOUT_MS) {
+                strcpy(current_note, "--");
+                printf("\rSilent       ");
+            }
+        }
+
         fflush(stdout);
     }
 
     running = false;
-    t.join();
+    t_led.join();
+    t_ble.join();
+
     snd_pcm_close(pcm);
     fftw_destroy_plan(plan);
     fftw_free(in);
     fftw_free(out);
     return 0;
 }
-
