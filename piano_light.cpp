@@ -238,7 +238,6 @@ int main() {
             auto note = identify(freq);
 
             if (!note.name.empty()) {
-                // 实时更新音符给蓝牙
                 current_note[0] = note.name[0];
                 current_note[1] = note.name[1];
                 current_note[2] = 0;
