@@ -28,8 +28,7 @@ atomic<bool> stop_led(false);
 
 char current_note[4] = "--";
 uint64_t last_note_time = 0;
-const uint64_t NOTE_TIMEOUT_MS = 2000; // 2秒无声音变Silent
-
+const uint64_t NOTE_TIMEOUT_MS = 300;
 const int LED_TIMEOUT_MS = 300;
 
 uint64_t millis() {
@@ -51,29 +50,29 @@ void signal_handler(int) {
     running = false;
 }
 
+// ==================== Bluetooth ==========================================
 void ble_thread() {
+    system("hciconfig hci0 down >/dev/null 2>&1");
     system("hciconfig hci0 up >/dev/null 2>&1");
-    system("hciconfig hci0 leadv 0 >/dev/null 2>&1");
+    system("hciconfig hci0 leadv 3 >/dev/null 2>&1");
+    usleep(200000);
 
-    string last;
     while (running) {
-        string note = current_note;
-        if (note == last) {
-            this_thread::sleep_for(chrono::milliseconds(200));
-            continue;
-        }
-        last = note;
+        unsigned char c1 = (unsigned char)current_note[0];
+        unsigned char c2 = (unsigned char)current_note[1];
 
-        char cmd[128];
-        snprintf(cmd, sizeof cmd,
-            "hcitool -i hci0 cmd 0x08 0x0008 07 02 01 06 03 FF 11 22 %02X %02X >/dev/null 2>&1",
-            note[0], note[1]);
+        char cmd[200];
+        snprintf(cmd, sizeof(cmd),
+            "hcitool -i hci0 cmd 0x08 0x0008 0A 02 01 06 06 FF 00 01 %02X %02X 00 00 >/dev/null 2>&1",
+            c1, c2);
+
         system(cmd);
-
-        this_thread::sleep_for(chrono::milliseconds(200));
+        usleep(8000);
     }
 }
+// ==========================================================================
 
+// ==================== Lights ==============================================
 void led_thread() {
     const int leds[] = {17, 27, 22, 23, 24};
     const int n = sizeof(leds)/sizeof(int);
@@ -125,6 +124,7 @@ void led_thread() {
 
     watcher.join();
 }
+// ======================================================================
 
 struct NoteDef {
     string name;
@@ -196,6 +196,7 @@ int main() {
     vector<int32_t> buf(CHUNK_SIZE*CHANNELS);
 
     last_note_time = millis();
+    string last_print;
 
     while (running) {
         int err = snd_pcm_readi(pcm, buf.data(), CHUNK_SIZE);
@@ -220,7 +221,7 @@ int main() {
         double vol = sqrt(sum / CHUNK_SIZE);
         bool detected = false;
 
-        if (vol > VOL_THRESHOLD && !cmd_run) {
+        if (vol > VOL_THRESHOLD) {
             fftw_execute(plan);
             double max_m = 0;
             int peak = 0;
@@ -237,24 +238,34 @@ int main() {
             auto note = identify(freq);
 
             if (!note.name.empty()) {
-                cmd_mode = note.mode;
-                cmd_speed = note.speed;
-                cmd_run = true;
-
+                // 实时更新音符给蓝牙
                 current_note[0] = note.name[0];
                 current_note[1] = note.name[1];
                 current_note[2] = 0;
+
                 last_note_time = millis();
                 detected = true;
 
-                printf("\rNote: %-3s    ", note.name.c_str());
+                if (!cmd_run) {
+                    cmd_mode = note.mode;
+                    cmd_speed = note.speed;
+                    cmd_run = true;
+                }
+
+                if (note.name != last_print) {
+                    printf("\rNote: %-3s    ", note.name.c_str());
+                    last_print = note.name;
+                }
             }
         }
 
         if (!detected) {
             if (millis() - last_note_time > NOTE_TIMEOUT_MS) {
+                if (last_print != "--") {
+                    printf("\rSilent       ");
+                    last_print = "--";
+                }
                 strcpy(current_note, "--");
-                printf("\rSilent       ");
             }
         }
 
