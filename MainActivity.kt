@@ -17,7 +17,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var noteText: TextView
     private val REQUEST_BLE_CODE = 1001
 
-    // 【缓存上次显示内容，避免重复UI刷新】
+    // Cache the previously displayed content to avoid repeated UI refreshes
     private var lastNote = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,32 +53,30 @@ class MainActivity : AppCompatActivity() {
             if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 startBleScan()
             } else {
-                noteText.text = "权限被拒绝"
+                noteText.text = "Permission was denied"
             }
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun startBleScan() {
-        noteText.text = "正在扫描…"
+        noteText.text = "Scanning for Bluetooth…"
 
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = bluetoothManager.adapter
 
         if (adapter == null || !adapter.isEnabled) {
-            noteText.text = "请打开蓝牙"
+            noteText.text = "Please turn on the Bluetooth"
             return
         }
 
         val scanner = adapter.bluetoothLeScanner
 
-        // ====================== 极限低延迟扫描设置 ======================
         val scanSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)       // 最低延迟
-            .setReportDelay(0)                                     // 完全不缓存，实时上报
-            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)// 不过滤，每条都收
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)      
+            .setReportDelay(0)                                     
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
-        // =================================================================
 
         scanner.startScan(null, scanSettings, object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -87,10 +85,8 @@ class MainActivity : AppCompatActivity() {
                 val manuData = result.scanRecord?.manufacturerSpecificData
                 val data = manuData?.get(0x0100) ?: return
 
-                // 直接取2个字符，不做多余运算
                 val noteStr = String(data, 0, 2)
 
-                // 只在变化时刷新，减少UI卡顿
                 if (noteStr == lastNote) return
                 lastNote = noteStr
 
