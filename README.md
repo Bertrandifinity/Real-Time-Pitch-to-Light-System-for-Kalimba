@@ -93,6 +93,7 @@ Our project was driven by a clear division of labor, formal project management (
 We believe in building in public\! Check out our development process, live demos, and tutorials on our social channels:
 
   * 🎥 **YouTube Channel & Live Demos:** [Subscribe and watch our project in action on YouTube (@Bcq-1122)](https://www.google.com/url?sa=E&source=gmail&q=https://www.youtube.com/@Bcq-1122)
+  *    The actual date of video upload can be seen in Youtube.png
   * 📰 **Community:** Keep an eye out for our upcoming project breakdown\!
 
 ---
