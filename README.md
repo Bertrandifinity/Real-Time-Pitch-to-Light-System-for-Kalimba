@@ -49,8 +49,29 @@ Ensure your Raspberry Pi runs a modern Linux OS and install the required DSP and
 ```bash
 sudo apt-get update
 sudo apt-get install build-essential libasound2-dev libfftw3-dev git -y
+````
 
+### 2\. Clone & Build
 
+```bash
+git clone [https://github.com/Bertrandifinity/Real-Time-Pitch-to-Light-System-for-Kalimba.git](https://github.com/Bertrandifinity/Real-Time-Pitch-to-Light-System-for-Kalimba.git)
+cd Real-Time-Pitch-to-Light-System-for-Kalimba
+
+# Compile using g++ with maximum optimization (-O3) and required linked libraries
+g++ -O3 -o piano_lights src/piano_lights.cpp -lasound -lfftw3 -lm -lpthread
+```
+
+### 3\. Execution
+
+The application requires hardware access privileges for native `pinctrl` GPIO manipulation.
+
+```bash
+sudo ./piano_lights
+```
+
+-----
+
+---
 
 ## 👥 Team Contributions & Project Management
 Our project was driven by a clear division of labor, formal project management (using GitHub Issues and branching strategies), and collaborative teamwork.
@@ -67,15 +88,11 @@ Our project was driven by a clear division of labor, formal project management (
   * Conducted unit testing and acoustic calibration to map exact Kalimba frequencies. Directed the public relations strategy and produced the social media video content.
 
 ---
+## 📱 Promotion & Social Media
 
-## 📱 Documentation, Video & PR Strategy
-We believe that a successful real-time product must be reproducible and well-promoted to its target audience:
+We believe in building in public\! Check out our development process, live demos, and tutorials on our social channels:
 
-* **Slick Video Demonstration:** We have produced a high-quality video demonstrating the real-time capabilities and visual appeal of our Kalimba light system. 
-  * 🎥 **Watch our Project Demo on YouTube:** [**@Bcq-1122 Channel**](https://www.youtube.com/@Bcq-1122)
-* **Social Media PR Strategy:** Our PR strategy targets the maker and embedded programming communities. The YouTube video serves as our primary visual pitch, complete with clear instructions and cross-platform links directing viewers to this GitHub repository for full reproducibility.
-* **Clear Reproducibility:** This repository contains a fully reproducible environment, including explicit hardware wiring diagrams, library prerequisites, and straightforward compilation instructions to ensure anyone can rebuild our embedded system from scratch.
+  * 🎥 **YouTube Channel & Live Demos:** [Subscribe and watch our project in action on YouTube (@Bcq-1122)](https://www.google.com/url?sa=E&source=gmail&q=https://www.youtube.com/@Bcq-1122)
+  * 📰 **Community:** Keep an eye out for our upcoming project breakdown\!
 
----
-
-The actual upload date of the video can be found in the Youtube.png.
+<!-- end list -->
