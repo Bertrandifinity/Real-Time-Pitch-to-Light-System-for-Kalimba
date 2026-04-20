@@ -95,4 +95,11 @@ We believe in building in public\! Check out our development process, live demos
   * 🎥 **YouTube Channel & Live Demos:** [Subscribe and watch our project in action on YouTube (@Bcq-1122)](https://www.google.com/url?sa=E&source=gmail&q=https://www.youtube.com/@Bcq-1122)
   * 📰 **Community:** Keep an eye out for our upcoming project breakdown\!
 
+---
+## 📱 Android Companion App (Bluetooth Integration)
+To enhance user interaction, we developed a companion Android application using **Android Studio (Kotlin)**. The app connects to the Raspberry Pi via Bluetooth to display the currently detected Kalimba note.
+* **Core Source Files:** The project utilizes `MainActivity.kt` (Bluetooth logic & UI updates), `activity_main.xml` (Layout UI), and `AndroidManifest.xml` (Hardware permissions handling).
+* **Pre-compiled Artifact:** For ease of testing and reproducibility, a ready-to-install `app-debug.apk` is provided directly in the repository.
+* **Engineering Constraint Analysis (Latency):** While our onboard C++ hardware LED visualization achieves strict real-time performance, the Bluetooth broadcasting protocol introduces an inherent propagation delay of several hundred milliseconds. Consequently, we designed the Android app as a secondary diagnostic/logging display, while the GPIO-driven LEDs serve as the primary real-time performance feedback mechanism.
+
 <!-- end list -->
