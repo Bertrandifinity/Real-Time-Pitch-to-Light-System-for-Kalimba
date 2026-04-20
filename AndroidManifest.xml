@@ -3,18 +3,15 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 蓝牙基础权限 -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
 
-    <!-- Android 12+ 必须的新蓝牙权限 -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="S" />
 
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- 声明必须要有BLE蓝牙 -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
