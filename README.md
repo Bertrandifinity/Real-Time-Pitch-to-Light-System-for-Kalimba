@@ -50,5 +50,32 @@ Ensure your Raspberry Pi runs a modern Linux OS and install the required DSP and
 sudo apt-get update
 sudo apt-get install build-essential libasound2-dev libfftw3-dev git -y
 
-Youtube: www.youtube.com/@Bcq-1122  
+
+
+## 👥 Team Contributions & Project Management
+Our project was driven by a clear division of labor, formal project management (using GitHub Issues and branching strategies), and collaborative teamwork.
+
+* **Yuanxu Li (3130055L):** *Team Leader & Software Architecture*
+  * Oversaw the implementation of SOLID principles, designed the core C++ class structures, and managed the GitHub repository (merging branches, creating formal releases).
+* **Liyang Hu (3075651H):** *Real-Time DSP & Algorithm Design*
+  * Implemented the FFTW3 Fast Fourier Transform logic, developed the quantitative pitch detection algorithm, and successfully isolated Kalimba fundamental frequencies from harmonic noise.
+* **Mingqi Duan (3075644D):** *Hardware Integration & Event Handling*
+  * Handled the physical I2S microphone wiring and configured the Linux `pinctrl` subsystem for responsive, event-driven GPIO LED triggering.
+* **Changqing Bao (3140708B):** *Multithreading & Memory Management*
+  * Designed the lock-free multithreading architecture between the audio and visualizer threads. Ensured failsafe memory management and zero memory leaks.
+* **Zheng Jin (3136460J):** *QA Testing, Calibration & PR Strategy*
+  * Conducted unit testing and acoustic calibration to map exact Kalimba frequencies. Directed the public relations strategy and produced the social media video content.
+
+---
+
+## 📱 Documentation, Video & PR Strategy
+We believe that a successful real-time product must be reproducible and well-promoted to its target audience:
+
+* **Slick Video Demonstration:** We have produced a high-quality video demonstrating the real-time capabilities and visual appeal of our Kalimba light system. 
+  * 🎥 **Watch our Project Demo on YouTube:** [**@Bcq-1122 Channel**](https://www.youtube.com/@Bcq-1122)
+* **Social Media PR Strategy:** Our PR strategy targets the maker and embedded programming communities. The YouTube video serves as our primary visual pitch, complete with clear instructions and cross-platform links directing viewers to this GitHub repository for full reproducibility.
+* **Clear Reproducibility:** This repository contains a fully reproducible environment, including explicit hardware wiring diagrams, library prerequisites, and straightforward compilation instructions to ensure anyone can rebuild our embedded system from scratch.
+
+---
+
 The actual upload date of the video can be found in the Youtube.png.
